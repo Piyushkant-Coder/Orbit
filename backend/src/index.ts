@@ -76,16 +76,8 @@ app.get('/api', (_req: Request, res: Response) => {
   });
 });
 
-// Socket.IO setup
 const pubClient = redis.duplicate();
 const subClient = redis.duplicate();
-
-Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
-  io.adapter(createAdapter(pubClient, subClient));
-}).catch((error) => {
-  console.error('Socket.IO Redis adapter connection failed:', error);
-  // Continue without Redis adapter for local dev
-});
 
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
@@ -114,6 +106,9 @@ const startServer = async () => {
     await prisma.$connect();
     console.log('✓ Database connected');
     
+    await redis.connect();
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
     await redis.ping();
     console.log('✓ Redis connected');
     
