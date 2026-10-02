@@ -1,0 +1,195 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  name          String
+  passwordHash  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+  assignedTasks Task[] @relation("TaskAssignee")
+  createdTasks  Task[] @relation("TaskCreator")
+  activity      ActivityLog[]
+  invitesSent   Invitation[]
+}
+
+model Workspace {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  createdAt   DateTime @default(now())
+  memberships Membership[]
+  invitations Invitation[]
+  boards      Board[]
+  lists       List[]
+  tasks       Task[]
+  labels      Label[]
+  taskLabels  TaskLabel[]
+  activity    ActivityLog[]
+}
+
+model Membership {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  workspaceId String   @db.Uuid
+  role        Role
+  createdAt   DateTime @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model Invitation {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  email       String
+  role        Role
+  tokenHash   String    @unique
+  invitedById String?   @db.Uuid
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   User?     @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+  
+  @@index([workspaceId, email])
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  familyId     String    @db.Uuid
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  usedAt       DateTime?
+  revokedAt    DateTime?
+  replacedById String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([familyId])
+}
+
+model Board {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lists       List[]
+  
+  @@unique([id, workspaceId])
+  @@index([workspaceId, createdAt(sort: Desc)])
+}
+
+model List {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  boardId     String   @db.Uuid
+  name        String
+  position    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  board       Board     @relation(fields: [boardId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  tasks       Task[]
+  
+  @@unique([id, workspaceId])
+  @@unique([id, workspaceId, boardId])
+  @@unique([boardId, position])
+  @@index([workspaceId])
+}
+
+model Task {
+  id           String     @id @default(uuid()) @db.Uuid
+  workspaceId  String     @db.Uuid
+  boardId      String     @db.Uuid
+  listId       String     @db.Uuid
+  title        String
+  description  String?
+  status       TaskStatus @default(TODO)
+  position     String
+  assigneeId   String?    @db.Uuid
+  createdById  String?    @db.Uuid
+  version      Int        @default(1)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  list         List       @relation(fields: [listId, workspaceId, boardId], references: [id, workspaceId, boardId], onDelete: Cascade)
+  assignee     User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy    User?      @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  labels       TaskLabel[]
+  
+  @@unique([id, workspaceId])
+  @@unique([listId, position])
+  @@index([workspaceId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([workspaceId, assigneeId])
+  @@index([workspaceId, status])
+}
+
+model Label {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  name        String
+  color       String
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       TaskLabel[]
+  
+  @@unique([workspaceId, name])
+  @@unique([id, workspaceId])
+}
+
+model TaskLabel {
+  taskId      String @db.Uuid
+  labelId     String @db.Uuid
+  workspaceId String @db.Uuid
+  task        Task      @relation(fields: [taskId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  label       Label     @relation(fields: [labelId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  @@id([taskId, labelId])
+  @@index([labelId])
+}
+
+model ActivityLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  actorId     String?  @db.Uuid
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor       User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  
+  @@index([workspaceId, createdAt(sort: Desc), id(sort: Desc)])
+}

@@ -1,0 +1,40 @@
+{
+  "name": "collaborative-workspace-frontend",
+  "version": "1.0.0",
+  "description": "Real-time collaborative workspace UI",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint pages --ext .ts,.tsx",
+    "type-check": "tsc --noEmit",
+    "format": "prettier --write src",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:ui": "vitest --ui"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.2",
+    "axios": "^1.6.0",
+    "zod": "^3.22.4",
+    "zustand": "^4.4.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^6.1.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/node": "^20.9.0",
+    "eslint-config-next": "^14.2.35",
+    "@typescript-eslint/eslint-plugin": "^6.10.0",
+    "@typescript-eslint/parser": "^6.10.0",
+    "eslint": "^8.53.0",
+    "prettier": "^3.0.3",
+    "typescript": "^5.2.2",
+    "vitest": "^0.34.0"
+  }
+}
