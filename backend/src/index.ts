@@ -4,12 +4,16 @@ import helmet from 'helmet';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './db';
 import { validateEnv } from './config/env';
 import { requestLogger } from './middleware/requestLogger';
 import { errorHandler } from './middleware/errorHandler';
 import { requestId } from './middleware/requestId';
 import { createClient } from 'redis';
+import rateLimit from 'express-rate-limit';
+import authRoutes from './routes/auth';
+import workspaceRoutes from './routes/workspaces';
+import invitationRoutes from './routes/invitations';
 
 const app: Express = express();
 const server = http.createServer(app);
@@ -21,7 +25,6 @@ const io = new SocketIOServer(server, {
   transports: ['websocket'],
 });
 
-const prisma = new PrismaClient();
 const redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
 redis.on('error', (error) => console.error('Redis client error:', error));
 
@@ -32,9 +35,26 @@ app.use(cors({
   credentials: true,
 }));
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '100kb' }));
 app.use(requestId);
 app.use(requestLogger);
+
+const authRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: { code: 'RATE_LIMITED', message: 'Too many authentication requests', requestId: (res.getHeader('X-Request-ID') as string) || 'unknown' },
+    });
+  },
+});
+
+app.use('/api/auth', authRateLimit, authRoutes);
+app.use('/api/workspaces', workspaceRoutes);
+app.use('/api/invitations', invitationRoutes);
 
 // Health check endpoints
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -143,10 +163,9 @@ process.on('unhandledRejection', (reason, promise) => {
   process.exit(1);
 });
 
-// Validate environment variables
-validateEnv();
-
-// Start the server
-startServer();
+if (require.main === module) {
+  validateEnv();
+  startServer();
+}
 
 export { app, server, io, prisma, redis };

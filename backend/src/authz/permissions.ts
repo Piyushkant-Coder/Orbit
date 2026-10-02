@@ -32,6 +32,7 @@ export const PERMISSION_MATRIX: Record<string, Set<Role>> = {
   'invitation:create': new Set([Role.OWNER, Role.ADMIN]),
   'invitation:list': new Set([Role.OWNER, Role.ADMIN]),
   'invitation:revoke': new Set([Role.OWNER, Role.ADMIN]),
+  'invitation:resend': new Set([Role.OWNER, Role.ADMIN]),
   'member:remove': new Set([Role.OWNER, Role.ADMIN]),
   'member:changeRole': new Set([Role.OWNER, Role.ADMIN]),
 
