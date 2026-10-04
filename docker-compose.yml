@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: workspace_postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -11,14 +10,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d workspace_dev"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: workspace_redis
     ports:
       - "6379:6379"
     volumes:
@@ -29,27 +27,47 @@ services:
       timeout: 5s
       retries: 5
 
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/workspace_dev"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["npm", "run", "db:migrate:deploy"]
+    restart: "no"
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: workspace_backend
     environment:
       NODE_ENV: development
       PORT: 3001
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/workspace_dev
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/workspace_dev"
       REDIS_URL: redis://redis:6379
-      ACCESS_TOKEN_SECRET: dev-secret-key-min-32-bytes-long-okay
-      REFRESH_TOKEN_SECRET: dev-refresh-key-min-32-bytes-long-okay
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-dev-secret-key-min-32-bytes-long-okay}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-dev-refresh-key-min-32-bytes-long-okay}
       ACCESS_TOKEN_TTL_SECONDS: 900
       REFRESH_TOKEN_TTL_SECONDS: 604800
       REFRESH_TOKEN_GRACE_PERIOD_SECONDS: 300
       REFRESH_REUSE_GRACE_SECONDS: 10
-      FRONTEND_ORIGIN: http://localhost:3000
-      APP_BASE_URL: http://localhost:3000
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       LOG_LEVEL: debug
       RATE_LIMIT_WINDOW_MS: 60000
       RATE_LIMIT_MAX_REQUESTS: 1000
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
+      RUN_WORKER_IN_PROCESS: "false"
     ports:
       - "3001:3001"
     depends_on:
@@ -57,26 +75,50 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: npm start
+      migrate:
+        condition: service_completed_successfully
+    command: ["npm", "start"]
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/workspace_dev"
+      REDIS_URL: redis://redis:6379
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-dev-secret-key-min-32-bytes-long-okay}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-dev-refresh-key-min-32-bytes-long-okay}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    command: ["node", "dist/worker.js"]
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: workspace_frontend
+      args:
+        BACKEND_URL: http://backend:3001/api
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+      NEXT_PUBLIC_API_URL: http://backend:3001/api
       NEXT_PUBLIC_WS_URL: ws://localhost:3001
     ports:
       - "3000:3000"
     depends_on:
-      - backend
-    command: npm start
+      backend:
+        condition: service_healthy
+    command: ["npm", "start"]
 
 volumes:
   postgres_data:
   redis_data:
-
-networks:
-  default:
-    name: workspace_network

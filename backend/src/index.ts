@@ -14,6 +14,10 @@ import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth';
 import workspaceRoutes from './routes/workspaces';
 import invitationRoutes from './routes/invitations';
+import phase3Routes from './routes/phase3';
+import { installRealtimeHandlers } from './realtime';
+import { startEmailWorker } from './queue/email';
+import { closeDashboardCache } from './cache/dashboard';
 
 const app: Express = express();
 const server = http.createServer(app);
@@ -41,8 +45,8 @@ app.use(requestId);
 app.use(requestLogger);
 
 const authRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 10,
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60 * 1000),
+  limit: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 10),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, res) => {
@@ -55,6 +59,7 @@ const authRateLimit = rateLimit({
 app.use('/api/auth', authRateLimit, authRoutes);
 app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/invitations', invitationRoutes);
+app.use('/api/workspaces', phase3Routes);
 
 // Health check endpoints
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -77,7 +82,7 @@ app.get('/api/health/ready', async (_req: Request, res: Response) => {
       database: 'ok',
       redis: redisStatus,
     });
-  } catch (error) {
+  } catch (_error) {
     res.status(503).json({
       error: {
         code: 'SERVICE_UNAVAILABLE',
@@ -98,23 +103,9 @@ app.get('/api', (_req: Request, res: Response) => {
 
 const pubClient = redis.duplicate();
 const subClient = redis.duplicate();
+let emailWorker: ReturnType<typeof startEmailWorker> | undefined;
 
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  if (!token) {
-    return next(new Error('UNAUTHORIZED'));
-  }
-  // Token verification will be implemented in Phase 2
-  next();
-});
-
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
-  
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-  });
-});
+installRealtimeHandlers(io);
 
 // Error handling middleware
 app.use(errorHandler);
@@ -123,14 +114,23 @@ app.use(errorHandler);
 const PORT = Number(process.env.PORT || 3001);
 const startServer = async () => {
   try {
+    const env = validateEnv();
     await prisma.$connect();
     console.log('✓ Database connected');
     
-    await redis.connect();
-    await Promise.all([pubClient.connect(), subClient.connect()]);
-    io.adapter(createAdapter(pubClient, subClient));
-    await redis.ping();
-    console.log('✓ Redis connected');
+    try {
+      await redis.connect();
+      await Promise.all([pubClient.connect(), subClient.connect()]);
+      io.adapter(createAdapter(pubClient, subClient));
+      await redis.ping();
+      console.log('✓ Redis connected');
+    } catch (redisError) {
+      console.error('Redis unavailable; continuing with local realtime delivery:', redisError);
+    }
+    if (env.RUN_WORKER_IN_PROCESS) {
+      emailWorker = startEmailWorker();
+      console.log('✓ Email worker running in process');
+    }
     
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`✓ Server running on http://0.0.0.0:${PORT}`);
@@ -147,6 +147,8 @@ process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
   server.close(async () => {
     await prisma.$disconnect();
+    await emailWorker?.close();
+    await closeDashboardCache();
     await redis.quit();
     console.log('Server shut down');
     process.exit(0);

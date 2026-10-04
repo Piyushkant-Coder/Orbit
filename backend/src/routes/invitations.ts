@@ -5,6 +5,7 @@ import { authenticate, AuthenticatedRequest } from '../middleware/authenticate';
 import { AppError } from '../middleware/errorHandler';
 import { asyncHandler } from '../utils/asyncHandler';
 import { hashToken } from '../utils/tokens';
+import { invalidateDashboard } from '../cache/dashboard';
 
 const router = Router();
 const tokenSchema = z.string().min(40).max(100);
@@ -43,6 +44,7 @@ router.post('/:token/accept', authenticate, asyncHandler(async (req: Authenticat
       data: { workspaceId: invitation.workspaceId, actorId: req.userId, action: 'member.added', entityType: 'member', entityId: req.userId },
     });
   });
+  await invalidateDashboard(invitation.workspaceId);
   res.status(201).json({ workspaceId: invitation.workspaceId, role: invitation.role });
 }));
 

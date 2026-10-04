@@ -1,0 +1,9 @@
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL ??= 'postgresql://postgres:postgres@localhost:5432/workspace_dev?schema=integration_test';
+process.env.REDIS_URL ??= 'redis://localhost:6379';
+process.env.ACCESS_TOKEN_SECRET ??= 'test-access-token-secret-that-is-at-least-32-bytes';
+process.env.REFRESH_TOKEN_SECRET ??= 'test-refresh-token-secret-that-is-at-least-32-bytes';
+process.env.FRONTEND_ORIGIN ??= 'http://localhost:3000';
+process.env.APP_BASE_URL ??= 'http://localhost:3000';
+process.env.SMTP_FROM ??= 'no-reply@example.com';
+process.env.RATE_LIMIT_MAX_REQUESTS ??= '1000';

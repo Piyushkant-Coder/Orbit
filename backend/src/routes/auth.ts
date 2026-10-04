@@ -10,6 +10,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { createAccessToken, createOpaqueToken, hashToken } from '../utils/tokens';
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from '../utils/cookies';
 import { getEnv } from '../config/env';
+import { enqueuePasswordResetEmail } from '../queue/email';
 
 const router = Router();
 const signupSchema = z.object({
@@ -18,6 +19,8 @@ const signupSchema = z.object({
   password: z.string().min(10).max(128),
 }).strict();
 const loginSchema = signupSchema.pick({ email: true, password: true }).strict();
+const passwordResetRequestSchema = z.object({ email: z.string().trim().toLowerCase().email().max(254) }).strict();
+const passwordResetSchema = z.object({ token: z.string().min(40).max(200), password: z.string().min(10).max(128) }).strict();
 
 function userDto(user: { id: string; email: string; name: string; createdAt: Date; updatedAt: Date }) {
   return { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt, updatedAt: user.updatedAt };
@@ -74,6 +77,42 @@ router.post('/login', asyncHandler(async (req, res) => {
   const { rawToken } = await issueRefreshToken(user.id);
   setRefreshCookie(res, rawToken);
   res.json({ accessToken: createAccessToken(user.id), user: userDto(user) });
+}));
+
+router.post('/forgot-password', asyncHandler(async (req, res) => {
+  const input = passwordResetRequestSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { email: input.email } });
+  if (user) {
+    const rawToken = createOpaqueToken();
+    await prisma.passwordResetToken.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() } });
+    await prisma.passwordResetToken.create({
+      data: { userId: user.id, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+    });
+    await enqueuePasswordResetEmail({
+      type: 'password-reset',
+      to: user.email,
+      userName: user.name,
+      resetUrl: `${getEnv().APP_BASE_URL}/reset-password?token=${encodeURIComponent(rawToken)}`,
+    });
+  }
+  res.json({ message: 'If an account exists for that email, a reset link has been sent.' });
+}));
+
+router.post('/reset-password', asyncHandler(async (req, res) => {
+  const input = passwordResetSchema.parse(req.body);
+  const tokenHash = hashToken(input.token);
+  const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
+  const result = await prisma.$transaction(async (tx) => {
+    const resetToken = await tx.passwordResetToken.findUnique({ where: { tokenHash } });
+    if (!resetToken || resetToken.usedAt || resetToken.expiresAt <= new Date()) return false;
+    const claimed = await tx.passwordResetToken.updateMany({ where: { id: resetToken.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (claimed.count !== 1) return false;
+    await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
+    await tx.refreshToken.updateMany({ where: { userId: resetToken.userId }, data: { revokedAt: new Date() } });
+    return true;
+  });
+  if (!result) throw new AppError('RESET_INVALID', 'This password reset link is invalid or expired', 400);
+  res.json({ message: 'Password reset successfully' });
 }));
 
 router.post('/refresh', asyncHandler(async (req, res) => {

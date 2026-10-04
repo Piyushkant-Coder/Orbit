@@ -27,8 +27,10 @@ model User {
   passwordHash  String
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  searchVector Unsupported("tsvector")?
   memberships   Membership[]
   refreshTokens RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
   assignedTasks Task[] @relation("TaskAssignee")
   createdTasks  Task[] @relation("TaskCreator")
   activity      ActivityLog[]
@@ -93,6 +95,19 @@ model RefreshToken {
   
   @@index([userId])
   @@index([familyId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Board {

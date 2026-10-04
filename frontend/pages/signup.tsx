@@ -1,0 +1,11 @@
+import Link from 'next/link';
+import { FormEvent, useState } from 'react';
+import { useRouter } from 'next/router';
+import { useAuth } from '../lib/auth';
+
+export default function Signup() {
+  const { signup } = useAuth(); const router = useRouter();
+  const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState('');
+  const submit = async (event: FormEvent) => { event.preventDefault(); setError(''); try { await signup(email, name, password); await router.push('/w'); } catch (e) { setError(e instanceof Error ? e.message : 'Unable to create account'); } };
+  return <main className="auth-page"><section className="auth-showcase"><Link href="/signup" className="brand auth-brand"><span className="brand-mark">O</span><span>Orbit</span></Link><div className="showcase-copy"><div className="eyebrow">A shared space for better work</div><h1>Good work<br /><em>moves together.</em></h1><p>Give every idea a place to land and every team a clear next step.</p></div><div className="showcase-orbit signup-art"><span /><span /><span /></div><small>Organize · Align · Move forward</small></section><section className="auth-panel"><form className="auth-card" onSubmit={submit}><div className="panel-top"><span className="eyebrow">START HERE</span><span className="help-mark">?</span></div><h1>Create your account</h1><p className="muted">Your team can join you once you’re in.</p><label>Your name<input placeholder="Alex Morgan" value={name} onChange={(e) => setName(e.target.value)} required /></label><label>Work email<input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required /></label><label>Password<input type="password" minLength={10} placeholder="At least 10 characters" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>{error && <p className="error">{error}</p>}<button className="button primary" type="submit">Create account <span>↗</span></button><p className="auth-footer">Already working here? <Link href="/login">Sign in</Link></p></form><small className="legal-note">Private by default · Built for focused teams</small></section></main>;
+}

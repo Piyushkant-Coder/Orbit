@@ -9,6 +9,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { canChangeRole, canInvite, canRemove } from '../authz/permissions';
 import { createOpaqueToken, hashToken } from '../utils/tokens';
 import { getEnv } from '../config/env';
+import { evictWorkspaceMember, publishRealtime } from '../realtime';
+import { enqueueInvitationEmail } from '../queue/email';
+import { invalidateDashboard } from '../cache/dashboard';
 
 const router = Router();
 const uuid = z.string().uuid();
@@ -106,6 +109,9 @@ router.delete('/:workspaceId/members/:userId', ...workspaceMiddleware('member:re
       data: { workspaceId: req.workspaceId!, actorId: req.userId, action: 'member.removed', entityType: 'member', entityId: targetId },
     });
   });
+  evictWorkspaceMember(targetId, req.workspaceId!);
+  publishRealtime('member:removed', { workspaceId: req.workspaceId!, actorId: req.userId, data: { userId: targetId } });
+  await invalidateDashboard(req.workspaceId!);
   res.status(204).send();
 }));
 
@@ -129,6 +135,20 @@ router.post('/:workspaceId/invitations', ...workspaceMiddleware('invitation:crea
     });
     return created;
   });
+  const [workspace, inviter] = await Promise.all([
+    prisma.workspace.findUniqueOrThrow({ where: { id: req.workspaceId! }, select: { name: true } }),
+    prisma.user.findUniqueOrThrow({ where: { id: req.userId! }, select: { name: true } }),
+  ]);
+  await enqueueInvitationEmail({
+    type: 'invitation',
+    invitationId: invitation.id,
+    to: invitation.email,
+    workspaceName: workspace.name,
+    inviterName: inviter.name,
+    inviteUrl: `${getEnv().APP_BASE_URL}/invite/${rawToken}`,
+    tokenGeneration: invitation.createdAt.getTime(),
+  });
+  await invalidateDashboard(req.workspaceId!);
   res.status(201).json({
     invitation: publicInvitation(invitation),
     inviteUrl: `${getEnv().APP_BASE_URL}/invite/${rawToken}`,
@@ -160,6 +180,20 @@ router.post('/:workspaceId/invitations/:invitationId/resend', ...workspaceMiddle
     });
     return updated;
   });
+  const [workspace, inviter] = await Promise.all([
+    prisma.workspace.findUniqueOrThrow({ where: { id: req.workspaceId! }, select: { name: true } }),
+    prisma.user.findUniqueOrThrow({ where: { id: req.userId! }, select: { name: true } }),
+  ]);
+  await enqueueInvitationEmail({
+    type: 'invitation',
+    invitationId: invitation.id,
+    to: invitation.email,
+    workspaceName: workspace.name,
+    inviterName: inviter.name,
+    inviteUrl: `${getEnv().APP_BASE_URL}/invite/${rawToken}`,
+    tokenGeneration: invitation.expiresAt.getTime(),
+  });
+  await invalidateDashboard(req.workspaceId!);
   res.json({ invitation: publicInvitation(invitation), inviteUrl: `${getEnv().APP_BASE_URL}/invite/${rawToken}` });
 }));
 
@@ -173,6 +207,7 @@ router.delete('/:workspaceId/invitations/:invitationId', ...workspaceMiddleware(
       data: { workspaceId: req.workspaceId!, actorId: req.userId, action: 'invitation.revoked', entityType: 'invitation', entityId: invitationId },
     }),
   ]);
+  await invalidateDashboard(req.workspaceId!);
   res.status(204).send();
 }));
 

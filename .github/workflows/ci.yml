@@ -7,18 +7,18 @@ on:
     branches: [main, develop]
 
 jobs:
-  backend-lint-and-build:
+  backend:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./backend
-    
     services:
       postgres:
         image: postgres:16-alpine
         env:
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: workspace_test
+          POSTGRES_DB: workspace_dev
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -26,7 +26,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-      
       redis:
         image: redis:7-alpine
         options: >-
@@ -36,129 +35,60 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
+          cache: npm
           cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+      - run: npm run lint
+      - name: Test with PostgreSQL and Redis
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/workspace_dev?schema=integration_test
+          REDIS_URL: redis://localhost:6379
+          ACCESS_TOKEN_SECRET: test-secret-key-min-32-bytes-long-okay
+          REFRESH_TOKEN_SECRET: test-refresh-key-min-32-bytes-long-okay
+          FRONTEND_ORIGIN: http://localhost:3000
+          APP_BASE_URL: http://localhost:3000
+        run: npm test
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check
-        run: npm run build
-
-      - name: Lint
-        run: npm run lint
-
-  frontend-lint-and-build:
+  frontend:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./frontend
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check
-        run: npm run type-check
-
-      - name: Lint
-        run: npm run lint
-
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm test -- --run
       - name: Build
         run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:3001/api
           NEXT_PUBLIC_WS_URL: ws://localhost:3001
 
-  integration-tests:
-    runs-on: ubuntu-latest
-    needs: [backend-lint-and-build]
-    defaults:
-      run:
-        working-directory: ./backend
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: workspace_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run migrations
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/workspace_test
-        run: npm run db:migrate:deploy
-
-      - name: Run tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/workspace_test
-          REDIS_URL: redis://localhost:6379
-          ACCESS_TOKEN_SECRET: test-secret-key-min-32-bytes-long-okay
-          REFRESH_TOKEN_SECRET: test-refresh-key-min-32-bytes-long-okay
-          FRONTEND_ORIGIN: http://localhost:3000
-        run: npm test
-
-  docker-build-check:
+  docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      - uses: docker/setup-buildx-action@v3
       - name: Build backend image
         uses: docker/build-push-action@v5
         with:
           context: ./backend
           push: false
-
       - name: Build frontend image
         uses: docker/build-push-action@v5
         with:
@@ -167,19 +97,14 @@ jobs:
 
   all-checks:
     runs-on: ubuntu-latest
-    needs:
-      - backend-lint-and-build
-      - frontend-lint-and-build
-      - integration-tests
-      - docker-build-check
     if: always()
+    needs: [backend, frontend, docker-build]
     steps:
-      - name: Check all jobs
+      - name: Fail when any required job fails
         run: |
-          if [ "${{ needs.backend-lint-and-build.result }}" != "success" ] || \
-             [ "${{ needs.frontend-lint-and-build.result }}" != "success" ] || \
-             [ "${{ needs.integration-tests.result }}" != "success" ] || \
-             [ "${{ needs.docker-build-check.result }}" != "success" ]; then
-            echo "One or more jobs failed"
+          if [ "${{ needs.backend.result }}" != "success" ] || \
+             [ "${{ needs.frontend.result }}" != "success" ] || \
+             [ "${{ needs.docker-build.result }}" != "success" ]; then
+            echo "One or more required CI jobs failed"
             exit 1
           fi
