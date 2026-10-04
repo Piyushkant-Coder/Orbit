@@ -1,12 +1,21 @@
 import { Queue, Worker, Job } from 'bullmq';
+import Redis from 'ioredis';
 import nodemailer from 'nodemailer';
 
-const connection = {
-  host: new URL(process.env.REDIS_URL || 'redis://localhost:6379').hostname,
-  port: Number(new URL(process.env.REDIS_URL || 'redis://localhost:6379').port || 6379),
-  maxRetriesPerRequest: 1,
-  enableOfflineQueue: false,
-};
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+
+export function createEmailRedisConnection(
+  url = redisUrl,
+  maxRetriesPerRequest: number | null = 1
+): Redis {
+  return new Redis(url, {
+    maxRetriesPerRequest,
+    enableOfflineQueue: maxRetriesPerRequest === null,
+    lazyConnect: true,
+  });
+}
+
+const queueRedis = createEmailRedisConnection();
 
 export interface InvitationEmailData {
   type: 'invitation';
@@ -27,7 +36,7 @@ export interface PasswordResetEmailData {
 type EmailJobData = InvitationEmailData | PasswordResetEmailData;
 
 export const emailQueue = new Queue<EmailJobData>('email', {
-  connection,
+  connection: queueRedis,
   defaultJobOptions: {
     attempts: 5,
     backoff: { type: 'exponential', delay: 2000 },
@@ -59,35 +68,45 @@ export async function enqueuePasswordResetEmail(data: PasswordResetEmailData): P
 async function processEmail(job: Job<EmailJobData>): Promise<void> {
   const smtpUrl = process.env.SMTP_URL;
   if (!smtpUrl) {
-    console.log(`Email link for ${job.data.to}: ${'inviteUrl' in job.data ? job.data.inviteUrl : job.data.resetUrl}`);
-    return;
+    throw new Error('SMTP_URL must be configured to send email');
   }
+  const from = process.env.SMTP_FROM;
+  if (!from) throw new Error('SMTP_FROM must be configured to send email');
+
   const transport = nodemailer.createTransport(smtpUrl);
-  if (job.data.type === 'invitation') {
+  try {
+    if (job.data.type === 'invitation') {
+      await transport.sendMail({
+        from,
+        to: job.data.to,
+        subject: `Invitation to ${job.data.workspaceName}`,
+        text: `${job.data.inviterName} invited you to ${job.data.workspaceName}: ${job.data.inviteUrl}`,
+      });
+      return;
+    }
     await transport.sendMail({
-      from: process.env.SMTP_FROM || 'no-reply@example.com',
+      from,
       to: job.data.to,
-      subject: `Invitation to ${job.data.workspaceName}`,
-      text: `${job.data.inviterName} invited you to ${job.data.workspaceName}: ${job.data.inviteUrl}`,
+      subject: 'Reset your Orbit password',
+      text: `Hi ${job.data.userName}, reset your Orbit password here: ${job.data.resetUrl}\n\nThis link expires in one hour.`,
     });
-    return;
+  } finally {
+    transport.close();
   }
-  await transport.sendMail({
-    from: process.env.SMTP_FROM || 'no-reply@example.com',
-    to: job.data.to,
-    subject: 'Reset your Orbit password',
-    text: `Hi ${job.data.userName}, reset your Orbit password here: ${job.data.resetUrl}\n\nThis link expires in one hour.`,
-  });
 }
 
 export function startEmailWorker(): Worker<EmailJobData> {
+  const workerRedis = createEmailRedisConnection(redisUrl, null);
   const worker = new Worker<EmailJobData>('email', processEmail, {
-    connection: { ...connection, maxRetriesPerRequest: null },
+    connection: workerRedis,
   });
-  worker.on('failed', (job, error) => console.error('Invitation email job failed:', job?.id, error));
+  worker.on('failed', (job, error) => console.error('Email job failed:', job?.id, error));
   return worker;
 }
 
 export async function closeEmailQueue(): Promise<void> {
   await emailQueue.close();
+  if (queueRedis.status === 'end') return;
+  if (queueRedis.status === 'ready') await queueRedis.quit();
+  else queueRedis.disconnect();
 }
