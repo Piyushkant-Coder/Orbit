@@ -35,6 +35,13 @@ export interface PasswordResetEmailData {
 
 type EmailJobData = InvitationEmailData | PasswordResetEmailData;
 
+interface OutgoingEmail {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+}
+
 export const emailQueue = new Queue<EmailJobData>('email', {
   connection: queueRedis,
   defaultJobOptions: {
@@ -65,31 +72,82 @@ export async function enqueuePasswordResetEmail(data: PasswordResetEmailData): P
   }
 }
 
-async function processEmail(job: Job<EmailJobData>): Promise<void> {
+function getResendApiKey(): string | undefined {
+  if (process.env.RESEND_API_KEY) return process.env.RESEND_API_KEY;
+
   const smtpUrl = process.env.SMTP_URL;
-  if (!smtpUrl) {
-    throw new Error('SMTP_URL must be configured to send email');
+  if (!smtpUrl) return undefined;
+
+  const url = new URL(smtpUrl);
+  if (url.hostname !== 'smtp.resend.com' || url.username !== 'resend' || !url.password) {
+    return undefined;
   }
+  return decodeURIComponent(url.password);
+}
+
+export async function sendResendEmail(
+  apiKey: string,
+  email: OutgoingEmail,
+  fetcher: typeof fetch = fetch
+): Promise<void> {
+  const response = await fetcher('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(email),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Resend email request failed with status ${response.status}`);
+  }
+
+  const result: unknown = await response.json();
+  if (
+    typeof result !== 'object' ||
+    result === null ||
+    !('id' in result) ||
+    typeof result.id !== 'string'
+  ) {
+    throw new Error('Resend returned an invalid email response');
+  }
+}
+
+async function processEmail(job: Job<EmailJobData>): Promise<void> {
   const from = process.env.SMTP_FROM;
   if (!from) throw new Error('SMTP_FROM must be configured to send email');
 
+  const email: OutgoingEmail =
+    job.data.type === 'invitation'
+      ? {
+          from,
+          to: job.data.to,
+          subject: `Invitation to ${job.data.workspaceName}`,
+          text: `${job.data.inviterName} invited you to ${job.data.workspaceName}: ${job.data.inviteUrl}`,
+        }
+      : {
+          from,
+          to: job.data.to,
+          subject: 'Reset your Orbit password',
+          text: `Hi ${job.data.userName}, reset your Orbit password here: ${job.data.resetUrl}\n\nThis link expires in one hour.`,
+        };
+
+  const resendApiKey = getResendApiKey();
+  if (resendApiKey) {
+    await sendResendEmail(resendApiKey, email);
+    return;
+  }
+
+  const smtpUrl = process.env.SMTP_URL;
+  if (!smtpUrl) {
+    throw new Error('RESEND_API_KEY or SMTP_URL must be configured to send email');
+  }
+
   const transport = nodemailer.createTransport(smtpUrl);
   try {
-    if (job.data.type === 'invitation') {
-      await transport.sendMail({
-        from,
-        to: job.data.to,
-        subject: `Invitation to ${job.data.workspaceName}`,
-        text: `${job.data.inviterName} invited you to ${job.data.workspaceName}: ${job.data.inviteUrl}`,
-      });
-      return;
-    }
-    await transport.sendMail({
-      from,
-      to: job.data.to,
-      subject: 'Reset your Orbit password',
-      text: `Hi ${job.data.userName}, reset your Orbit password here: ${job.data.resetUrl}\n\nThis link expires in one hour.`,
-    });
+    await transport.sendMail(email);
   } finally {
     transport.close();
   }

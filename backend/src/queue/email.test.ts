@@ -1,8 +1,51 @@
-import { closeEmailQueue, createEmailRedisConnection } from './email';
+import { closeEmailQueue, createEmailRedisConnection, sendResendEmail } from './email';
 
 describe('email Redis connection', () => {
   afterAll(async () => {
     await closeEmailQueue();
+  });
+
+  describe('Resend email delivery', () => {
+    const email = {
+      from: 'Orbit <no-reply@mail.example.com>',
+      to: 'recipient@example.com',
+      subject: 'Test',
+      text: 'Test message',
+    };
+
+    it('sends email through the Resend HTTPS API', async () => {
+      const fetcher = jest
+        .fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>()
+        .mockResolvedValue(
+        new Response(JSON.stringify({ id: 'email-id' }), { status: 200 })
+      );
+
+      await sendResendEmail('test-api-key', email, fetcher);
+
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://api.resend.com/emails',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer test-api-key',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(email),
+        })
+      );
+    });
+
+    it('fails the job when Resend rejects a request', async () => {
+      const fetcher = jest
+        .fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>()
+        .mockResolvedValue(
+        new Response('{}', { status: 401 })
+      );
+
+      await expect(sendResendEmail('invalid-api-key', email, fetcher)).rejects.toThrow(
+        'Resend email request failed with status 401'
+      );
+    });
   });
 
   it('uses credentials and TLS settings from the Railway Redis URL', () => {
