@@ -87,6 +87,8 @@ npm run dev
 
 For local work outside Compose, start the email worker separately with `npm run worker` from `backend/`, or use the in-process worker setting as appropriate for your environment. The SMTP default in Compose routes messages to Mailpit. For production, configure `RESEND_API_KEY`, `SMTP_FROM`, and a public `APP_BASE_URL`; the worker sends through Resend's HTTPS API. Existing `smtps://resend:...@smtp.resend.com` values in `SMTP_URL` are also recognized, while other `SMTP_URL` values remain available for SMTP providers and local Mailpit.
 
+Email enqueue operations have a short timeout so a queue outage does not indefinitely delay account or invitation requests; failed enqueue attempts are logged for operational follow-up.
+
 ## Tests and quality gates
 
 With PostgreSQL and Redis available locally, from `backend/`:
