@@ -17,6 +17,20 @@ export function createEmailRedisConnection(
 
 const queueRedis = createEmailRedisConnection();
 
+async function addEmailJob(name: string, data: EmailJobData, jobId: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      emailQueue.add(name, data, { jobId }).then(() => undefined),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Email queue enqueue timed out')), 3000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export interface InvitationEmailData {
   type: 'invitation';
   invitationId: string;
@@ -54,9 +68,11 @@ export const emailQueue = new Queue<EmailJobData>('email', {
 
 export async function enqueueInvitationEmail(data: InvitationEmailData): Promise<void> {
   try {
-    await emailQueue.add('send-invitation-email', data, {
-      jobId: `invite-email:${data.invitationId}:${data.tokenGeneration}`,
-    });
+    await addEmailJob(
+      'send-invitation-email',
+      data,
+      `invite-email:${data.invitationId}:${data.tokenGeneration}`
+    );
   } catch (error) {
     console.error('Invitation email enqueue failed; link remains available:', error);
   }
@@ -64,9 +80,11 @@ export async function enqueueInvitationEmail(data: InvitationEmailData): Promise
 
 export async function enqueuePasswordResetEmail(data: PasswordResetEmailData): Promise<void> {
   try {
-    await emailQueue.add('send-password-reset-email', data, {
-      jobId: `password-reset:${data.to}:${data.resetUrl}`,
-    });
+    await addEmailJob(
+      'send-password-reset-email',
+      data,
+      `password-reset:${data.to}:${data.resetUrl}`
+    );
   } catch (error) {
     console.error('Password reset email enqueue failed:', error);
   }
